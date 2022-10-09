@@ -15,8 +15,9 @@ ROOT =	miniMD
 EXE =	$(ROOT)_$@
 OBJ =	$(SRC:.cpp=.o)
 
-# Help
 
+# Help
+.PHONY: help
 help:
 	@echo 'Type "make target {Options}" where target is one of:'
 	@echo '      openmpi     (using OpenMPI)'
@@ -42,12 +43,30 @@ help:
 
 # Targets
 
-openmpi:
+.PHONY: tsan
+tsan:
+	$(eval CCFLAGS += -fsanitize=thread -g )
+	$(eval LINKFLAGS += -fsanitize=thread -g )
+	@echo 'Compiling with threadsanitizer enabled'
+
+.PHONY: RMA
+RMA:
+	$(eval CCFLAGS += -DUSE_RMA )
+	@echo 'Compiling with RMA communication (default window synchronization is MPI_Win_lock_all)'
+
+.PHONY: RMA_FENCE
+RMA_FENCE: RMA	
+	$(eval CCFLAGS += -DUSE_FENCE )
+	@echo 'Changing window synchronization to MPI_Win_fence'
+
+openmpi: $(CCFLAGS) $(LINKFLAGS)
 	@if [ ! -d Obj_$@ ]; then mkdir Obj_$@; fi
 	@cp -p $(SRC) $(INC) Obj_$@
 	@cp Makefile.$@ Obj_$@/Makefile
 	@cd Obj_$@; \
-	$(MAKE)  "OBJ = $(OBJ)" "INC = $(INC)" "EXE = ../$(EXE)" ../$(EXE)
+	export CCFLAGS="$(CCFLAGS)" &&\
+	export LINKFLAGS="$(LINKFLAGS)" &&\
+	$(MAKE) "OBJ = $(OBJ)" "INC = $(INC)" "EXE = ../$(EXE)" ../$(EXE)
 #	@if [ -d Obj_$@ ]; then cd Obj_$@; rm $(SRC) $(INC) Makefile*; fi
 
 cray:
@@ -75,18 +94,23 @@ intel:
 
 # Clean
 
+.PHONY: clean
 clean:
 	rm -r Obj_*
 
+.PHONY: clean_openmpi
 clean_openmpi:
 	rm -r Obj_openmpi
 
+.PHONY: clean_intel
 clean_intel:
 	rm -r Obj_intel
 
+.PHONY: clean_cray
 clean_cray:
 	rm -r Obj_cray
 	
+.PHONY: clean_cray_intel
 clean_cray_intel:
 	rm -r Obj_cray_intel
 
@@ -97,5 +121,14 @@ input=lj
 halfneigh=0
 path=""
 
+.PHONY: test
 test:
 	bash run_tests ${scope} ${input} ${halfneigh} ${path}   
+
+.PHONY: run
+run:
+	$(MPIEXEC) -np 4 ./miniMD_openmpi -t 1 -s 10  -dm -i in.lj.miniMD -s 0 -n 1000            
+
+.PHONY: mustrun
+mustrun:
+	mustrun --must:layout $(PWD)/layout.xml --  ./miniMD_openmpi -t 1 -s 10  -dm -i in.lj.miniMD -s 0 -n 1000     

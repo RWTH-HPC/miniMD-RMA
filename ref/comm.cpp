@@ -51,9 +51,43 @@ Comm::Comm()
   do_safeexchange = 0;
   maxthreads = 0;
   maxnlocal = 0;
+
+#ifdef USE_RMA
+  MPI_Win_create(&nsend_buf, (MPI_Aint)(1 * sizeof(int)), sizeof(int), MPI_INFO_NULL, MPI_COMM_WORLD, &win_nsend_buf);
+  MPI_Win_create(buf_send, (MPI_Aint)((maxsend + BUFMIN) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+#ifdef USE_FENCE
+  MPI_Win_fence(0, win_nsend_buf);
+  MPI_Win_fence(0, win_buf_send);
+#else
+  MPI_Win_lock_all(0, win_nsend_buf);
+  MPI_Win_lock_all(0, win_buf_send);
+#endif
+#endif
 }
 
-Comm::~Comm() {}
+Comm::~Comm() {
+}
+
+#ifdef USE_RMA
+void Comm::free_windows(){
+  if(win_nsend_buf != MPI_WIN_NULL) {
+#ifdef USE_FENCE
+    MPI_Win_fence(0, win_nsend_buf);
+#else
+    MPI_Win_unlock_all(win_nsend_buf);
+#endif
+    MPI_Win_free(&win_nsend_buf);
+  }  
+  if(win_buf_send != MPI_WIN_NULL) {
+#ifdef USE_FENCE
+    MPI_Win_fence(0, win_buf_send);
+#else
+    MPI_Win_unlock_all(win_buf_send);
+#endif
+    MPI_Win_free(&win_buf_send);
+  }
+}
+#endif
 
 /* setup spatial-decomposition communication patterns */
 
@@ -291,6 +325,11 @@ void Comm::communicate(Atom &atom)
 
     //#pragma omp barrier
     atom.pack_comm(sendnum[iswap], sendlist[iswap], buf_send, pbc_flags);
+    
+#ifdef USE_RMA
+    #pragma omp single    
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
     //#pragma omp barrier
 
@@ -301,9 +340,20 @@ void Comm::communicate(Atom &atom)
       #pragma omp master
       {
         MPI_Datatype type = (sizeof(MMD_float) == 4) ? MPI_FLOAT : MPI_DOUBLE;
+        
+#ifdef USE_RMA
+        MPI_Get(buf_recv, comm_recv_size[iswap], type, recvproc[iswap], 0, comm_recv_size[iswap], type, win_buf_send);      
+#ifdef USE_FENCE
+        MPI_Win_fence(0, win_buf_send);
+#else
+        MPI_Win_flush(recvproc[iswap], win_buf_send);
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
+#else
         MPI_Sendrecv(buf_send, comm_send_size[iswap], type, sendproc[iswap], 0,
-                     buf_recv, comm_recv_size[iswap], type, recvproc[iswap], 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                      buf_recv, comm_recv_size[iswap], type, recvproc[iswap], 0,
+                      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
       }
       buf = buf_recv;
     } else buf = buf_send;
@@ -330,6 +380,12 @@ void Comm::reverse_communicate(Atom &atom)
     // #pragma omp barrier
     atom.pack_reverse(recvnum[iswap], firstrecv[iswap], buf_send);
 
+#ifdef USE_RMA
+    #pragma omp master
+        MPI_Barrier(MPI_COMM_WORLD);
+    #pragma omp barrier
+#endif
+
     // #pragma omp barrier
     /* exchange with another proc
        if self, set recv buffer to send buffer */
@@ -339,9 +395,20 @@ void Comm::reverse_communicate(Atom &atom)
       #pragma omp master
       {
         MPI_Datatype type = (sizeof(MMD_float) == 4) ? MPI_FLOAT : MPI_DOUBLE;
+        
+#ifdef USE_RMA
+        MPI_Get(buf_recv, reverse_recv_size[iswap], type, sendproc[iswap], 0, reverse_recv_size[iswap], type, win_buf_send);      
+#ifdef USE_FENCE
+        MPI_Win_fence(0, win_buf_send);
+#else
+        MPI_Win_flush(sendproc[iswap], win_buf_send);
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
+#else
         MPI_Sendrecv(buf_send, reverse_send_size[iswap], type, recvproc[iswap], 0,
-                     buf_recv, reverse_recv_size[iswap], type, sendproc[iswap], 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                      buf_recv, reverse_recv_size[iswap], type, sendproc[iswap], 0,
+                      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
       }
       buf = buf_recv;
     } else buf = buf_send;
@@ -367,6 +434,7 @@ void Comm::exchange(Atom &atom)
     return exchange_all(atom);
 
   int i, m, n, idim, nsend, nrecv, nrecv1, nrecv2, nlocal;
+  //nsend = 0;
   MMD_float lo, hi, value;
   MMD_float* x;
 
@@ -514,40 +582,84 @@ void Comm::exchange(Atom &atom)
     {
       atom.nlocal = nlocal - total_nsend;
       nsend = total_nsend * 7;
+#ifdef USE_RMA
+      nsend_buf = nsend;
+      MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
       /* send/recv atoms in both directions
          only if neighboring procs are different */
-
+      
+#ifdef USE_RMA
+      MPI_Get(&nrecv1, 1, MPI_INT, procneigh[idim][1], 0, 1, MPI_INT, win_nsend_buf);      
+#ifdef USE_FENCE
+      MPI_Win_fence(0, win_nsend_buf);
+#else
+      MPI_Win_flush(procneigh[idim][1], win_nsend_buf);
+#endif
+#else
       MPI_Sendrecv(&nsend, 1, MPI_INT, procneigh[idim][0], 0,
-                   &nrecv1, 1, MPI_INT, procneigh[idim][1], 0,
-                   MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    &nrecv1, 1, MPI_INT, procneigh[idim][1], 0,
+                    MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
       nrecv = nrecv1;
 
       if(procgrid[idim] > 2) {
-        MPI_Sendrecv(&nsend, 1, MPI_INT, procneigh[idim][1], 0,
-                     &nrecv2, 1, MPI_INT, procneigh[idim][0], 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#ifdef USE_RMA
+      MPI_Get(&nrecv2, 1, MPI_INT, procneigh[idim][0], 0, 1, MPI_INT, win_nsend_buf);      
+#ifdef USE_FENCE
+      MPI_Win_fence(0, win_nsend_buf);
+#else
+      MPI_Win_flush(procneigh[idim][0], win_nsend_buf);
+#endif
+#else
+      MPI_Sendrecv(&nsend, 1, MPI_INT, procneigh[idim][1], 0,
+                    &nrecv2, 1, MPI_INT, procneigh[idim][0], 0,
+                    MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
         nrecv += nrecv2;
       }
 
       if(nrecv > maxrecv) growrecv(nrecv);
 
       MPI_Datatype type = (sizeof(MMD_float) == 4) ? MPI_FLOAT : MPI_DOUBLE;
+      
+#ifdef USE_RMA
+      MPI_Get(buf_recv, nrecv1, type, procneigh[idim][1], 0, nrecv1, type, win_buf_send);      
+#ifdef USE_FENCE
+      MPI_Win_fence(0, win_buf_send);
+#else
+      MPI_Win_flush(procneigh[idim][1], win_buf_send);
+      MPI_Barrier(MPI_COMM_WORLD);
+#endif
+#else
       MPI_Sendrecv(buf_send, nsend, type, procneigh[idim][0], 0,
-                   buf_recv, nrecv1, type, procneigh[idim][1], 0,
-                   MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    buf_recv, nrecv1, type, procneigh[idim][1], 0,
+                    MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
 
       if(procgrid[idim] > 2) {
+#ifdef USE_RMA
+        MPI_Get(buf_recv+nrecv1, nrecv2, type, procneigh[idim][0], 0, nrecv2, type, win_buf_send);      
+#ifdef USE_FENCE
+        MPI_Win_fence(0, win_buf_send);
+#else
+        MPI_Win_flush(procneigh[idim][0], win_buf_send);
+#endif
+#else
         MPI_Sendrecv(buf_send, nsend, type, procneigh[idim][1], 0,
-                     buf_recv+nrecv1, nrecv2, type, procneigh[idim][0], 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                      buf_recv+nrecv1, nrecv2, type, procneigh[idim][0], 0,
+                      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
       }
-
       nrecv_atoms = nrecv / 7;
+#ifdef USE_RMA
+      MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
       for(int i = 0; i < threads->omp_num_threads; i++)
         nrecv_thread[i] = 0;
-
+      
     }
     /* check incoming atoms to see if they are in my box
        if they are, add to my list */
@@ -599,6 +711,7 @@ void Comm::exchange(Atom &atom)
 void Comm::exchange_all(Atom &atom)
 {
   int i, m, n, idim, nsend, nrecv, nrecv1, nrecv2, nlocal;
+  //nsend = 0;
   MMD_float lo, hi, value;
   MMD_float* x;
 
@@ -649,21 +762,46 @@ void Comm::exchange_all(Atom &atom)
     }
 
     atom.nlocal = nlocal;
+#ifdef USE_RMA
+    nsend_buf = nsend;
+    MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
     /* send/recv atoms in both directions
     *        only if neighboring procs are different */
     for(int ineed = 0; ineed < 2 * need[idim]; ineed += 1) {
       if(ineed < procgrid[idim] - 1) {
+
+#ifdef USE_RMA
+        MPI_Get(&nrecv, 1, MPI_INT, recvproc_exc[iswap], 0, 1, MPI_INT, win_nsend_buf);      
+#ifdef USE_FENCE
+        MPI_Win_fence(0, win_nsend_buf);
+#else            
+        MPI_Win_flush(recvproc_exc[iswap], win_nsend_buf);
+#endif
+#else
         MPI_Sendrecv(&nsend, 1, MPI_INT, sendproc_exc[iswap], 0,
-                     &nrecv, 1, MPI_INT, recvproc_exc[iswap], 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    &nrecv, 1, MPI_INT, recvproc_exc[iswap], 0,
+                    MPI_COMM_WORLD, MPI_STATUS_IGNORE);        
+#endif
 
         if(nrecv > maxrecv) growrecv(nrecv);
 
         MPI_Datatype type = (sizeof(MMD_float) == 4) ? MPI_FLOAT : MPI_DOUBLE;
+        
+#ifdef USE_RMA
+        MPI_Get(buf_recv, nrecv, type, recvproc_exc[iswap], 0, nrecv, type, win_buf_send);      
+#ifdef USE_FENCE
+        MPI_Win_fence(0, win_buf_send);
+#else            
+        MPI_Win_flush(recvproc_exc[iswap], win_buf_send);
+        MPI_Barrier(MPI_COMM_WORLD);        
+#endif
+#else
         MPI_Sendrecv(buf_send, nsend, type, sendproc_exc[iswap], 0,
-                     buf_recv, nrecv, type, recvproc_exc[iswap], 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                      buf_recv, nrecv, type, recvproc_exc[iswap], 0,
+                      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
 
         /* check incoming atoms to see if they are in my box
         *        if they are, add to my list */
@@ -699,7 +837,8 @@ void Comm::exchange_all(Atom &atom)
 
 void Comm::borders(Atom &atom)
 {
-  int i, m, n, iswap, idim, ineed, nsend, nrecv, nall, nfirst, nlast;
+  int i, m, n, iswap, idim, nsend, ineed, nrecv, nall, nfirst, nlast;
+  //nsend = 0;
   MMD_float lo, hi;
   int pbc_flags[4];
   MMD_float* x;
@@ -816,19 +955,42 @@ void Comm::borders(Atom &atom)
 
       #pragma omp master
       {
-        nsend = nsend_thread[threads->omp_num_threads - 1];
-
+        nsend = nsend_thread[threads->omp_num_threads - 1];        
+        nsend_buf = nsend;
+        
         if(sendproc[iswap] != me) {
+          
+#ifdef USE_RMA
+          MPI_Barrier(MPI_COMM_WORLD);
+          MPI_Get(&nrecv, 1, MPI_INT, recvproc[iswap], 0, 1, MPI_INT, win_nsend_buf);      
+#ifdef USE_FENCE
+          MPI_Win_fence(0, win_nsend_buf);
+#else            
+          MPI_Win_flush(recvproc[iswap],win_nsend_buf);
+#endif
+#else
           MPI_Sendrecv(&nsend, 1, MPI_INT, sendproc[iswap], 0,
                        &nrecv, 1, MPI_INT, recvproc[iswap], 0,
                        MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
 
           if(nrecv * atom.border_size > maxrecv) growrecv(nrecv * atom.border_size);
 
           MPI_Datatype type = (sizeof(MMD_float) == 4) ? MPI_FLOAT : MPI_DOUBLE;
+#ifdef USE_RMA
+          MPI_Get(buf_recv, nrecv * atom.border_size, type, recvproc[iswap], 0, nrecv * atom.border_size, type, win_buf_send);      
+#ifdef USE_FENCE
+          MPI_Win_fence(0, win_buf_send);
+#else
+          MPI_Win_flush(recvproc[iswap], win_buf_send);
+          MPI_Barrier(MPI_COMM_WORLD);
+#endif
+#else          
           MPI_Sendrecv(buf_send, nsend * atom.border_size, type, sendproc[iswap], 0,
-                       buf_recv, nrecv * atom.border_size, type, recvproc[iswap], 0,
-                       MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        buf_recv, nrecv * atom.border_size, type, recvproc[iswap], 0,
+                        MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
+          
           buf = buf_recv;
         } else {
           nrecv = nsend;
@@ -888,6 +1050,20 @@ void Comm::growsend(int n)
 {
   maxsend = static_cast<int>(BUFFACTOR * n);
   buf_send = (MMD_float*) realloc(buf_send, (maxsend + BUFEXTRA) * sizeof(MMD_float));
+#ifdef USE_RMA
+#ifdef USE_FENCE
+  MPI_Win_fence(0, win_buf_send);
+#else
+  MPI_Win_unlock_all(win_buf_send);
+#endif
+  MPI_Win_free(&win_buf_send);
+  MPI_Win_create(buf_send, (MPI_Aint)((maxsend + BUFEXTRA) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+#ifdef USE_FENCE
+  MPI_Win_fence(0, win_buf_send);
+#else
+  MPI_Win_lock_all(0, win_buf_send);
+#endif
+#endif
 }
 
 /* free/malloc the size of the recv buffer as needed with BUFFACTOR */

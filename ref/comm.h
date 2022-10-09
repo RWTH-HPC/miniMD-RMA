@@ -35,6 +35,7 @@
 #include "atom.h"
 #include "threadData.h"
 #include "timer.h"
+#include "mpi.h"
 
 class Comm
 {
@@ -50,6 +51,9 @@ class Comm
     void growsend(int);
     void growrecv(int);
     void growlist(int, int);
+#ifdef USE_RMA
+    void free_windows();
+#endif
 
   public:
     int me;                           // my proc ID
@@ -97,6 +101,12 @@ class Comm
     int maxthreads;
     int maxnlocal;
     int nrecv_atoms;
+
+    MPI_Win win_buf_send;
+
+  private:
+    MPI_Win win_nsend_buf;
+    int nsend_buf;
 
 
 };

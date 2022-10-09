@@ -265,7 +265,7 @@ int main(int argc, char** argv)
   Neighbor neighbor(ntypes);
   Integrate integrate;
   Thermo thermo;
-  Comm comm;
+  //Comm comm;
   Timer timer;
   ThreadData threads;
 
@@ -290,7 +290,7 @@ int main(int argc, char** argv)
   threads.omp_num_threads = num_threads;
 
   atom.threads = &threads;
-  comm.threads = &threads;
+  //comm.threads = &threads;
   force->threads = &threads;
   integrate.threads = &threads;
   neighbor.threads = &threads;
@@ -310,8 +310,8 @@ int main(int argc, char** argv)
 
   neighbor.timer = &timer;
   force->timer = &timer;
-  comm.check_safeexchange = check_safeexchange;
-  comm.do_safeexchange = do_safeexchange;
+  //comm.check_safeexchange = check_safeexchange;
+  //comm.do_safeexchange = do_safeexchange;
   force->use_sse = use_sse;
   neighbor.halfneigh = halfneigh;
 
@@ -322,6 +322,7 @@ int main(int argc, char** argv)
 
     if(me == 0) printf("ERROR: Trying to run with -sse with miniMD reference version. Use SSE variant instead. Exiting.\n");
 
+    //comm.free_windows();
     MPI_Finalize();
     exit(0);
 #endif
@@ -378,6 +379,13 @@ int main(int argc, char** argv)
   force->cutforce = in.force_cut;
   thermo.nstat = in.thermo_nstat;
 
+  // Delaying the initialization of comm, so that the windows created by comm do not have to be freed 
+  // before MPI_Finalize might be called by force->setup() [force_eam.cpp]
+  force->setup();
+  Comm comm;  
+  comm.check_safeexchange = check_safeexchange;
+  comm.do_safeexchange = do_safeexchange;
+  comm.threads = &threads;
 
   if(me == 0)
     printf("# Create System:\n");
@@ -386,7 +394,7 @@ int main(int argc, char** argv)
     read_lammps_data(atom, comm, neighbor, integrate, thermo, in.datafile, in.units);
     MMD_float volume = atom.box.xprd * atom.box.yprd * atom.box.zprd;
     in.rho = 1.0 * atom.natoms / volume;
-    force->setup();
+    //force->setup();
 
     if(in.forcetype == FORCEEAM) atom.mass = force->mass;
   } else {
@@ -398,7 +406,7 @@ int main(int argc, char** argv)
 
     integrate.setup();
 
-    force->setup();
+    //force->setup();
 
     if(in.forcetype == FORCEEAM) atom.mass = force->mass;
 
@@ -415,6 +423,15 @@ int main(int argc, char** argv)
   if(me == 0) {
     fprintf(stdout, "# " VARIANT_STRING " output ...\n");
     fprintf(stdout, "# Run Settings: \n");
+#ifdef USE_RMA
+#ifdef USE_FENCE
+    fprintf(stdout, "\t# MPI communication: MPI-RMA with fences\n");
+#else
+    fprintf(stdout, "\t# MPI communication: MPI-RMA with lock_all\n");
+#endif
+#else
+    fprintf(stdout, "\t# MPI communication: MPI two-sided communication\n");
+#endif
     fprintf(stdout, "\t# MPI processes: %i\n", neighbor.threads->mpi_num_threads);
     fprintf(stdout, "\t# OpenMP threads: %i\n", neighbor.threads->omp_num_threads);
     fprintf(stdout, "\t# Inputfile: %s\n", input_file == 0 ? "in.lj.miniMD" : input_file);
@@ -499,6 +516,10 @@ int main(int argc, char** argv)
 
   delete force;
   MPI_Barrier(MPI_COMM_WORLD);
+  
+#ifdef USE_RMA
+  comm.free_windows();
+#endif
   MPI_Finalize();
   return 0;
 }

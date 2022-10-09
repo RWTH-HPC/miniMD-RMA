@@ -874,9 +874,21 @@ void ForceEAM::communicate(Atom &atom, Comm &comm)
 
     if(comm.sendproc[iswap] != me) {
       MPI_Datatype type = (sizeof(MMD_float) == 4) ? MPI_FLOAT : MPI_DOUBLE;
-      MPI_Sendrecv(comm.buf_send, comm.comm_send_size[iswap], MPI_FLOAT, comm.sendproc[iswap], 0,
-                   comm.buf_recv, comm.comm_recv_size[iswap], MPI_FLOAT, comm.recvproc[iswap], 0,
-                   MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      
+#ifdef USE_RMA
+      MPI_Barrier(MPI_COMM_WORLD);
+      MPI_Get(comm.buf_recv, comm.comm_recv_size[iswap], type, comm.recvproc[iswap], 0, comm.comm_recv_size[iswap], type, comm.win_buf_send);      
+#ifdef USE_FENCE
+          MPI_Win_fence(0, comm.win_buf_send);
+#else
+          MPI_Win_flush_all(comm.win_buf_send);
+          MPI_Barrier(MPI_COMM_WORLD);
+#endif
+#else      
+        MPI_Sendrecv(comm.buf_send, comm.comm_send_size[iswap], MPI_FLOAT, comm.sendproc[iswap], 0,
+                     comm.buf_recv, comm.comm_recv_size[iswap], MPI_FLOAT, comm.recvproc[iswap], 0,
+                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#endif
       buf = comm.buf_recv;
     } else buf = comm.buf_send;
 
