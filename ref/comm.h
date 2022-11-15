@@ -78,6 +78,7 @@ class Comm
     MMD_float* buf_recv;                 // recv buffer for all comm
     MMD_float* buf;
     int maxsend;
+    int buf_send_size;
     int maxrecv;
 
     int procneigh[3][2];              // my 6 proc neighbors

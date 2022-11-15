@@ -44,7 +44,8 @@
 Comm::Comm()
 {
   maxsend = BUFMIN;
-  buf_send = (MMD_float*) malloc((maxsend + BUFMIN) * sizeof(MMD_float));
+  buf_send_size = maxsend + BUFMIN;
+  buf_send = (MMD_float*) malloc((buf_send_size) * sizeof(MMD_float));
   maxrecv = BUFMIN;
   buf_recv = (MMD_float*) malloc(maxrecv * sizeof(MMD_float));
   check_safeexchange = 0;
@@ -54,7 +55,7 @@ Comm::Comm()
 
 #ifdef USE_RMA
   MPI_Win_create(&nsend_buf, (MPI_Aint)(1 * sizeof(int)), sizeof(int), MPI_INFO_NULL, MPI_COMM_WORLD, &win_nsend_buf);
-  MPI_Win_create(buf_send, (MPI_Aint)((maxsend + BUFMIN) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+  MPI_Win_create(buf_send, (MPI_Aint)((buf_send_size) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
 #ifdef USE_FENCE
   MPI_Win_fence(0, win_nsend_buf);
   MPI_Win_fence(0, win_buf_send);
@@ -530,7 +531,7 @@ void Comm::exchange(Atom &atom)
         nsend_thread[i] = total_nsend;
       }
 
-      if(total_nsend * 7 > maxsend) growsend(total_nsend * 7);
+      growsend(total_nsend * 7);
     }
 
     #pragma omp barrier
@@ -753,7 +754,7 @@ void Comm::exchange_all(Atom &atom)
 
     while(i < nlocal) {
       if(x[i * PAD + idim] < lo || x[i * PAD + idim] >= hi) {
-        if(nsend > maxsend) growsend(nsend);
+        growsend(nsend);
 
         nsend += atom.pack_exchange(i, &buf_send[nsend]);
         atom.copy(nlocal - 1, i);
@@ -937,7 +938,7 @@ void Comm::borders(Atom &atom)
 
         if(total_nsend > maxsendlist[iswap]) growlist(iswap, total_nsend);
 
-        if(total_nsend * 4 > maxsend) growsend(total_nsend * 4);
+        growsend(total_nsend * 4);
       }
       #pragma omp barrier
 
@@ -1039,7 +1040,7 @@ void Comm::borders(Atom &atom)
     max2 = MAX(max2, reverse_recv_size[iswap]);
   }
 
-  if(max1 > maxsend) growsend(max1);
+  growsend(max1);
 
   if(max2 > maxrecv) growrecv(max2);
 }
@@ -1048,16 +1049,19 @@ void Comm::borders(Atom &atom)
 
 void Comm::growsend(int n)
 {
-  maxsend = static_cast<int>(BUFFACTOR * n);
-  buf_send = (MMD_float*) realloc(buf_send, (maxsend + BUFEXTRA) * sizeof(MMD_float));
+  if(n > maxsend) {
+    maxsend = static_cast<int>(BUFFACTOR * n);
+    buf_send_size = maxsend + BUFEXTRA;
+    buf_send = (MMD_float*) realloc(buf_send, (buf_send_size) * sizeof(MMD_float));
+  }
 #ifdef USE_RMA
 #ifdef USE_FENCE
   MPI_Win_fence(0, win_buf_send);
-#else
-  MPI_Win_unlock_all(win_buf_send);
+#else                                  
+  MPI_Win_unlock_all(win_buf_send);  
 #endif
   MPI_Win_free(&win_buf_send);
-  MPI_Win_create(buf_send, (MPI_Aint)((maxsend + BUFEXTRA) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+  MPI_Win_create(buf_send, (buf_send_size) * sizeof(MMD_float), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
 #ifdef USE_FENCE
   MPI_Win_fence(0, win_buf_send);
 #else
