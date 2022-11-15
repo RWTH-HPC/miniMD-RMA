@@ -1049,12 +1049,21 @@ void Comm::borders(Atom &atom)
 
 void Comm::growsend(int n)
 {
+
+#ifdef USE_RMA
+  bool bgrow = false;
+#endif
   if(n > maxsend) {
     maxsend = static_cast<int>(BUFFACTOR * n);
     buf_send_size = maxsend + BUFEXTRA;
     buf_send = (MMD_float*) realloc(buf_send, (buf_send_size) * sizeof(MMD_float));
+#ifdef USE_RMA
+    bgrow = true;
+#endif
   }
 #ifdef USE_RMA
+  MPI_Allreduce(MPI_IN_PLACE, &bgrow, 1, MPI_CXX_BOOL, MPI_LOR, MPI_COMM_WORLD);
+  if(bgrow == false) return;
 #ifdef USE_FENCE
   MPI_Win_fence(0, win_buf_send);
 #else                                  
