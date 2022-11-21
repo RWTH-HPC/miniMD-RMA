@@ -1042,7 +1042,9 @@ void Comm::borders(Atom &atom)
     max1 = MAX(max1, reverse_send_size[iswap]);
     max2 = MAX(max2, reverse_recv_size[iswap]);
   }
+  #pragma omp master
   growsend(max1);
+  #pragma omp barrier
 
   if(max2 > maxrecv) growrecv(max2);
 }
