@@ -45,7 +45,9 @@ Comm::Comm()
 {
   maxsend = BUFMIN;
   buf_send_size = maxsend + BUFMIN;
+#ifndef USE_RMA  
   buf_send = (MMD_float*) malloc((buf_send_size) * sizeof(MMD_float));
+#endif
   maxrecv = BUFMIN;
   buf_recv = (MMD_float*) malloc(maxrecv * sizeof(MMD_float));
   check_safeexchange = 0;
@@ -55,7 +57,8 @@ Comm::Comm()
 
 #ifdef USE_RMA
   MPI_Win_create(&nsend_buf, (MPI_Aint)(1 * sizeof(int)), sizeof(int), MPI_INFO_NULL, MPI_COMM_WORLD, &win_nsend_buf);
-  MPI_Win_create(buf_send, (MPI_Aint)((buf_send_size) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+  //MPI_Win_create(buf_send, (MPI_Aint)((buf_send_size) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+  MPI_Win_allocate((MPI_Aint)((buf_send_size) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &buf_send, &win_buf_send);
 #ifdef USE_FENCE
   MPI_Win_fence(0, win_nsend_buf);
   MPI_Win_fence(0, win_buf_send);
@@ -1039,7 +1042,6 @@ void Comm::borders(Atom &atom)
     max1 = MAX(max1, reverse_send_size[iswap]);
     max2 = MAX(max2, reverse_recv_size[iswap]);
   }
-
   growsend(max1);
 
   if(max2 > maxrecv) growrecv(max2);
@@ -1049,14 +1051,15 @@ void Comm::borders(Atom &atom)
 
 void Comm::growsend(int n)
 {
-
 #ifdef USE_RMA
   bool bgrow = false;
 #endif
   if(n > maxsend) {
     maxsend = static_cast<int>(BUFFACTOR * n);
     buf_send_size = maxsend + BUFEXTRA;
+#ifndef USE_RMA
     buf_send = (MMD_float*) realloc(buf_send, (buf_send_size) * sizeof(MMD_float));
+#endif
 #ifdef USE_RMA
     bgrow = true;
 #endif
@@ -1070,7 +1073,8 @@ void Comm::growsend(int n)
   MPI_Win_unlock_all(win_buf_send);  
 #endif
   MPI_Win_free(&win_buf_send);
-  MPI_Win_create(buf_send, (buf_send_size) * sizeof(MMD_float), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
+  MPI_Win_allocate((MPI_Aint)((buf_send_size) * sizeof(MMD_float)), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &buf_send, &win_buf_send);
+  //MPI_Win_create(buf_send, (buf_send_size) * sizeof(MMD_float), sizeof(MMD_float), MPI_INFO_NULL, MPI_COMM_WORLD, &win_buf_send);
 #ifdef USE_FENCE
   MPI_Win_fence(0, win_buf_send);
 #else
