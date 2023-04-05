@@ -96,23 +96,23 @@ intel:
 
 .PHONY: clean
 clean:
-	rm -r Obj_*
+	rm -r -f Obj_*
 
 .PHONY: clean_openmpi
 clean_openmpi:
-	rm -r Obj_openmpi
+	rm -r -f Obj_openmpi
 
 .PHONY: clean_intel
 clean_intel:
-	rm -r Obj_intel
+	rm -r -f Obj_intel
 
 .PHONY: clean_cray
 clean_cray:
-	rm -r Obj_cray
+	rm -r -f Obj_cray
 	
 .PHONY: clean_cray_intel
 clean_cray_intel:
-	rm -r Obj_cray_intel
+	rm -r -f Obj_cray_intel
 
 # Test
 
