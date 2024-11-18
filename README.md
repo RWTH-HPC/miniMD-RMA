@@ -1,3 +1,10 @@
+   ## Port to MPI-RMA
+
+  To port miniMD to MPI-RMA, the following changes were made: Replaced `MPI_Sendrecv` calls with `MPI_Get`, and used `MPI_Win_lock_all`, `unlock_all`, and `MPI_Barrier` for RMA completion and synchronization. Note, that the array used for the window **win_buf_send** might be resized during the execution, breaking subsequent data accesses on that window. Since `MPI_Win_allocate` is a collective call we have to ensure that each all processes resize their window.
+
+
+   ## Original README
+   
    miniMD is a simple, parallel molecular dynamics (MD) code.   miniMD is
    an MD microapplication in the Mantevo project at Sandia National 
    Laboratories ( http://www.mantevo.org ). The primary 
